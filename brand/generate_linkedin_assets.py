@@ -14,11 +14,12 @@ import os
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 
-# Brand palette
-GREEN_DEEP = (0x0B, 0x3D, 0x2E)
-TEAL_DEEP  = (0x0A, 0x6B, 0x66)
-GREEN_BRIGHT = (0x22, 0xC5, 0x5E)
-LEAF_LIGHT = (0x9B, 0xE7, 0xC9)
+# Brand palette (must match favicon.svg exactly)
+GREEN_DEEP = (0x0B, 0x3D, 0x2E)   # #0B3D2E — gradient start
+TEAL        = (0x0D, 0x94, 0x88)  # #0D9488 — gradient end (favicon)
+TEAL_DEEP   = (0x0A, 0x6B, 0x66)  # #0A6B66 — darker accent (kept for reference)
+GREEN_BRIGHT = (0x22, 0xC5, 0x5E) # #22C55E — right leaf (95% opacity)
+LEAF_LIGHT = (0x9B, 0xE7, 0xC9)   # #9BE7C9 — left leaf
 WHITE = (255, 255, 255)
 
 def lerp(a, b, t):
@@ -56,39 +57,74 @@ def load_font(size, bold=True):
             continue
     return ImageFont.load_default()
 
-def draw_leaf(size, fill, vein=WHITE):
-    """Single leaf (ellipse + vein) on transparent RGBA."""
+# ── Bezier helpers (replicate the exact favicon.svg paths) ─────────────────
+# favicon paths (viewBox 64x64):
+#   right leaf: M32 50 c0-12 7-20 22-22 -2 14 -8 22 -22 22 Z
+#   left  leaf: M32 50 c0-12-7-20-22-22  2 14  8 22  22 22 Z
+#   stem      : M32 50 V26  (white, stroke-width 2.4)
+
+def _cubic(p0, p1, p2, p3, t):
+    u = 1 - t
+    return (
+        u*u*u*p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t*t*t*p3[0],
+        u*u*u*p0[1] + 3*u*u*t*p1[1] + 3*u*t*t*p2[1] + t*t*t*p3[1],
+    )
+
+def _leaf_points(scale, right=True):
+    """Sample the two cubic segments of one leaf (in 64-space), scaled to `scale`."""
+    if right:
+        a0, a1, a2, a3 = (32, 50), (32, 38), (39, 30), (54, 28)
+        b0, b1, b2, b3 = (54, 28), (52, 42), (46, 50), (32, 50)
+    else:
+        a0, a1, a2, a3 = (32, 50), (32, 38), (25, 30), (10, 28)
+        b0, b1, b2, b3 = (10, 28), (12, 42), (18, 50), (32, 50)
+    pts = []
+    n = 48
+    for i in range(n + 1):
+        t = i / n
+        pts.append(_cubic(a0, a1, a2, a3, t))
+    for i in range(1, n + 1):
+        t = i / n
+        pts.append(_cubic(b0, b1, b2, b3, t))
+    return [(x * scale, y * scale) for (x, y) in pts]
+
+def draw_sprout(size, with_bg=True):
+    """Render the Fluxoniks sprout mark at `size`, matching favicon.svg exactly.
+    If with_bg, paint the rounded gradient square first (as in the favicon)."""
+    s = size / 64.0  # scale from 64-space
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    leaf = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(leaf)
-    lw, lh = int(size * 0.78), int(size * 0.46)
-    lx, ly = (size - lw) // 2, (size - lh) // 2
-    ld.ellipse([lx, ly, lx + lw, ly + lh], fill=(*fill, 255))
-    leaf = leaf.rotate(-35, resample=Image.BICUBIC, expand=False)
-    img.paste(leaf, (0, 0), leaf)
-    v = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    vd = ImageDraw.Draw(v)
-    vw = max(2, int(size * 0.03))
-    vd.line([(size * 0.28, size * 0.72), (size * 0.72, size * 0.28)], fill=(*vein, 230), width=vw)
-    v = v.rotate(-35, resample=Image.BICUBIC, expand=False)
-    img.paste(v, (0, 0), v)
+    d = ImageDraw.Draw(img)
+    if with_bg:
+        radius = int(15 * s)
+        tile = rounded_gradient(size, radius, GREEN_DEEP, TEAL)
+        img.paste(tile, (0, 0), tile)
+        d = ImageDraw.Draw(img)
+    # left leaf (lighter) then right leaf (brighter) on top, matching favicon layer order
+    left_fill = (*LEAF_LIGHT, 255)
+    right_fill = (*GREEN_BRIGHT, int(255 * 0.95))
+    d.polygon(_leaf_points(s, right=False), fill=left_fill)
+    d.polygon(_leaf_points(s, right=True), fill=right_fill)
+    # stem — white vertical line from (32,50) to (32,26), width 2.4 (85% opacity)
+    stem_w = max(2, int(round(2.4 * s)))
+    d.line(
+        [(32 * s, 50 * s), (32 * s, 26 * s)],
+        fill=(*WHITE, int(255 * 0.85)),
+        width=stem_w,
+    )
     return img
 
+def draw_leaf(size, fill, vein=WHITE):
+    """Deprecated single-leaf — kept for compatibility. Not used in new logo."""
+    return Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
 def make_logo(size, out_path):
-    radius = int(size * 0.22)
-    tile = rounded_gradient(size, radius, GREEN_DEEP, TEAL_DEEP)
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    canvas.paste(tile, (0, 0), tile)
-    ls = int(size * 0.62)
-    l1 = draw_leaf(ls, GREEN_BRIGHT, vein=WHITE)
-    l2 = draw_leaf(int(ls * 0.8), LEAF_LIGHT, vein=WHITE)
-    canvas.paste(l1, (int(size * 0.18), int(size * 0.16)), l1)
-    canvas.paste(l2, (int(size * 0.34), int(size * 0.40)), l2)
-    canvas.save(out_path, "PNG")
+    """Logo = the exact favicon sprout (gradient square + two leaves + stem)."""
+    img = draw_sprout(size, with_bg=True)
+    img.save(out_path, "PNG")
     print(f"saved {out_path} ({size}x{size})")
 
 def make_cover(w, h, out_path, logo_size=None):
-    bg = dgradient(w, h, GREEN_DEEP, TEAL_DEEP).convert("RGBA")
+    bg = dgradient(w, h, GREEN_DEEP, TEAL).convert("RGBA")
     glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     r = int(h * 1.1)
@@ -100,12 +136,7 @@ def make_cover(w, h, out_path, logo_size=None):
     bg.paste(glow, (0, 0), glow)
     if logo_size is None:
         logo_size = int(h * 0.62)
-    lm = rounded_gradient(logo_size, int(logo_size * 0.22), GREEN_DEEP, TEAL_DEEP)
-    ls = int(logo_size * 0.62)
-    l1 = draw_leaf(ls, GREEN_BRIGHT, vein=WHITE)
-    l2 = draw_leaf(int(ls * 0.8), LEAF_LIGHT, vein=WHITE)
-    lm.paste(l1, (int(logo_size * 0.18), int(logo_size * 0.16)), l1)
-    lm.paste(l2, (int(logo_size * 0.34), int(logo_size * 0.40)), l2)
+    lm = draw_sprout(logo_size, with_bg=True)
     pad = int(h * 0.18)
     bg.paste(lm, (pad, (h - logo_size) // 2), lm)
     d = ImageDraw.Draw(bg)
